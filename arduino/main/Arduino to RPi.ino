@@ -35,6 +35,8 @@ const byte SFRAME_RR = 0x00;
 byte receive_seq = 0;
 bool firstIFrame = false;
 
+uint16_t crc16(uint8_t const *buf, int len);
+
 void establishContact() {
   bool handshake = false;
   while (!handshake) {
@@ -100,6 +102,26 @@ void setup() {
   xTaskCreate(ReadValues, "ReadValues", 2000, NULL, 2, NULL);
   xTaskCreate(SendValues, "SendValues", 2500, NULL, 2, NULL);
   vTaskStartScheduler();
+}
+
+uint16_t crc16(uint8_t const *buf, int len) {
+    /* Sample use
+    uint16_t chk = crc16(&msg[1], 2);  // Calculate checksum on bytes at index 1 and 2
+    bool is_valid = chk == (buf[3] << 8) | buf[4]
+    */
+    uint16_t remainder = 0x0000;
+    uint16_t poly = 0x1021;
+    for (int byte = 0; byte < len; ++byte) {
+        remainder ^= (message[byte] << 8);
+        for (uint8_t bit = 8; bit > 0; --bit) {
+            if (remainder & 0x8000) {
+                remainder = (remainder << 1) ^ poly;
+            } else {
+                remainder = (remainder << 1);
+            }
+        }
+    }
+    return remainder;
 }
 
 bool isHFrameCorrect(uint64_t HFrame) {
