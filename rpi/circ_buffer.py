@@ -18,9 +18,12 @@ class CircularBuffer:
         self.load = 0
         self.MAX_LOAD = 0.8 * self.maxlen  # Fill up to 80% before expanding
 
+        self.locks = [threading.RLock() for _ in range(self.maxlen)]
+
     def write_one(self, byte):
-        self.buf[self.write_idx] = byte
-        self.write_idx = (self.write_idx + 1) & self.mask
+        with self.locks[self.write_idx]:
+            self.buf[self.write_idx] = byte
+            self.write_idx = (self.write_idx + 1) & self.mask
         self.load += 1
 
     def write(self, bytes_):
@@ -30,21 +33,23 @@ class CircularBuffer:
             self.write_one(byte)
 
     def read(self):
-        byte = self.buf[self.read_idx]
-        self.read_idx = (self.read_idx + 1) & self.mask
+        with self.locks[self.read_idx]:
+            byte = self.buf[self.read_idx]
+            self.read_idx = (self.read_idx + 1) & self.mask
         self.load -= 1
         return byte
 
     def read_until(self, stop_byte, ignore_first_byte):
-        """Returns all bytes up to and including stop_byte or end of buffer, whichever
-        occurs first.
+        """Returns all bytes up to and including stop_byte. If stop byte not
+        found at end of buffer, blocks until it is found.
         If ignore_first_byte is True, the function does not return if the very first byte
         read is the stop byte.
         """
         bytearr = []
         cached_read_idx = self.read_idx
         i = self.read_idx
-        while (i != self.write_idx - 1):
+        byte = None
+        while (byte != stop_byte):
             byte = self.read()
             bytearr.append(byte)
             if byte == stop_byte:
@@ -66,6 +71,7 @@ class CircularBuffer:
         self.maxlen = 2 * self.maxlen
         self.mask = self.maxlen - 1
         self.MAX_LOAD = 0.8 * self.maxlen
+        self.locks = [threading.RLock() for _ in range(self.maxlen)]
 
         new_buf = bytearray(self.maxlen)
         with threading.RLock():  # Don't allow reads/writes while expanding

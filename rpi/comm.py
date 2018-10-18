@@ -1,4 +1,5 @@
 import asyncio
+import sys
 
 import serial_asyncio
 from bitstring import BitArray
@@ -27,9 +28,11 @@ class SerialProtocol(asyncio.Protocol):
         self.send_seq = 1   # Secondary increments its own send_seq separately
         self.recv_seq = 0   # Secondary increments its own recv_seq separately
         self.start_stop_count = 0
+        self.rej_seqs = set()  # Send seqs of iframes that have been rejected
+        # self.file_pos_at_rej = None
 
-        self.buf = CircularBuffer(1024)  # 1024-byte buffer
-        self.send_buf = {}
+        self.buf = CircularBuffer(4096)
+        self.send_buf = {}  # Max size of 128, keyed by send seq
         self.send_buf[self.send_seq] = []  # Allow appending to first elem
 
     async def _send_handshake(self):
@@ -61,15 +64,18 @@ class SerialProtocol(asyncio.Protocol):
             self.transport.write(data)
             # print('Message sent: {}\n'.format(BitArray(data)))
             if self._sending_iframe:
+                # Note: branch not called since since Pi doesn't send I-frames
                 # Write to send buffer in case retransmission requested
                 self.send_buf[self.send_seq] = data
-                self._incr_send_seq()
+                self.send_seq = self._incr_seq(self.send_seq)
                 self.send_buf[self.send_seq] = []
                 self._sending_iframe = False
             else:  # s/h
+                # Note: branch not called since since Arduino doesn't send S-frames
                 # Store all frames for retransmission if REJ received
                 # Since s/h don't have unique send no, store under last iframe seq
-                self.send_buf[self.send_seq].append(data)
+                # self.send_buf[self.send_seq].append(data)
+                pass
 
     async def send_message(self, message):
         """Feed a message to the sender coroutine."""
@@ -87,13 +93,6 @@ class SerialProtocol(asyncio.Protocol):
         self.start_stop_count += data.count(START_STOP_BYTE)
 
         if self.start_stop_count > 1:   # Read if full frame received
-        #     bytearr = bytearray(START_STOP_BYTE)
-        #     if self.buf.read() != START_STOP_BYTE:
-        #         # Data not framed by byte, ignore until start byte encountered
-        #         # read_until will pop the start byte from the buffer, so
-        #         # bytearr is initialised with start byte already
-        #         self.buf.read_until(START_STOP_BYTE, ignore_first_byte=False)
-
             bytearr = self.buf.read_until(START_STOP_BYTE, ignore_first_byte=True)
             self.start_stop_count -= bytearr.count(START_STOP_BYTE)
 
@@ -101,10 +100,12 @@ class SerialProtocol(asyncio.Protocol):
 
             try:
                 fr = Frame.make_frame(bytearr)
-            except ValueError as e:  # Frame error
+            except ValueError as e:  # Frame error, eg incorrect checksum
                 print(e)
                 print('Requesting retransmission')
-                self._rej_iframe_ready.set()  # Send REJ frame
+                # self.file_pos_at_rej = csvfile.tell()  # Go back to this position before writing
+                self.rej_seqs.add(self.recv_seq)
+                # self._rej_iframe_ready.set()  # Send REJ frame
                 return
 
             if fr.SORT == Frame.Sort.H:
@@ -119,29 +120,41 @@ class SerialProtocol(asyncio.Protocol):
                     print('Handshake recv seq does not match handshake send seq')
 
             elif fr.SORT == Frame.Sort.I:
-                print('Fr send seq: {}'.format(fr.send_seq))
+                # print('Fr send seq: {}'.format(fr.send_seq))
+                self.recv_seq = self._incr_seq(self.recv_seq)
 
-                self._incr_recv_seq()
+                # Retransmission received
+                if fr.send_seq in self.rej_seqs:
+                    self.rej_seqs.remove(fr.send_seq)
+                    # self.file_pos_at_rej = None
+                    # csvfile.seek(self.file_pos_at_rej)
+                    # csvfile.write(fr.to_ascii() + '\n')
+                    # print('Overwrote csvfile')
+                    # self._ack_iframe_ready.set()
+
+                # In-order transmission
+                elif fr.send_seq == self.recv_seq:
+                    csvfile.write(fr.to_ascii() + '\n')
+                    # Acknowledge receipt of I-frame
+                    # print('Acknowledging I-frame')
+                    self._ack_iframe_ready.set()
+
                 # One or more frames were lost
-                if fr.send_seq != self.recv_seq:
+                else:
                     print('Frame(s) {} missing. Requesting retransmission'.format(
                         [i for i in range(self.recv_seq, fr.send_seq)])
                     )
-                    self._decr_recv_seq()
-                    self._rej_iframe_ready.set()  # Send REJ frame
-                    return
+                    # self.recv_seq = self._decr_seq(self.recv_seq)
+                    # self._rej_iframe_ready.set()  # Send REJ frame
+                    self.rej_seqs.add(fr.send_seq)
+                    pass
 
-                # print('Writing data to file')
-                csvfile.write(fr.to_ascii() + '\n')
-                csvfile.flush()
-
-                # Acknowledge receipt of I-frame
-                # TODO: ack every n frames?
-                # print('Acknowledging I-frame')
-                self._ack_iframe_ready.set()
+                if fr.send_seq & 0x1F == 0:  # Every 32 frames, force write to file
+                    csvfile.flush()
 
             else:  # S-frame
-                # print('Received S-frame')
+                # Branch not called since Arduino doesn't send S-frames
+                print('Received S-frame')
                 if fr.TYPE == SFrame.Type.RR:
                     self._secondary_ready.set()  # Let messages be sent
                     # All frames up to recv_seq acked, del
@@ -197,17 +210,11 @@ class SerialProtocol(asyncio.Protocol):
             await self.send_message(sfr.bytes)
             self._rej_iframe_ready.clear()
 
-    def _incr_send_seq(self):
-        """Increment send sequence number. Must be called after sending an
-        I-frame.
-        """
-        self.send_seq = (self.send_seq + 1) & 0x7F  # 0-127
+    def _incr_seq(self, seq):
+        return (seq + 1) & 0x7F  # 0-127
 
-    def _incr_recv_seq(self):
-        self.recv_seq = (self.recv_seq + 1) & 0x7F  # 0-127
-
-    def _decr_recv_seq(self):
-        self.recv_seq = (self.recv_seq - 1) & 0x7F  # 0-127
+    def _decr_seq(self, seq):
+        return (seq - 1) & 0x7F  # 0-127
 
 
 async def feed_frame(protocol, frame):
@@ -218,16 +225,23 @@ async def feed_frame(protocol, frame):
 
 
 if __name__ == '__main__':
-    csvfile = open('readings.csv', 'w+', newline='')
+    if (len(sys.argv) != 3):
+        print('python comm.py <folder_name> <file_name>')
+        sys.exit()
+
+    csvfile = open('{}/{}.csv'.format(sys.argv[1], sys.argv[2]), 'w+', newline='')
     csvfile.seek(0)
     csvfile.truncate()   # remove preivous data
     csvfile.write('AcX 1,AcY 1,AcZ 1,GyX 1,GyY 1,GyZ 1,AcX 2,AcY 2,AcZ 2,GyX 2,GyY 2,GyZ 2,AcX 3,AcY 3,AcZ 3,GyX 3,GyY 3,GyZ 3,voltage,current,power,energy\n')
 
     loop = asyncio.get_event_loop()
-    coro = serial_asyncio.create_serial_connection(loop, SerialProtocol, '/dev/serial0', baudrate=115200)
+    coro = serial_asyncio.create_serial_connection(loop,
+                                                   SerialProtocol,
+                                                   '/dev/serial0',
+                                                   baudrate=115200)
     _, proto = loop.run_until_complete(coro)
-    message = IFrame(proto.recv_seq, proto.send_seq, b'abcdef')
-    asyncio.ensure_future(feed_frame(proto, message))
+    # message = IFrame(proto.recv_seq, proto.send_seq, b'abcdef')
+    # asyncio.ensure_future(feed_frame(proto, message))
 
     try:
         loop.run_forever()

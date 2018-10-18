@@ -3,19 +3,19 @@
 #include <Arduino_FreeRTOS.h>
 #include <semphr.h>
 
-#define DEBUG 0  // Set to 0 in production code
+//#define DEBUGP   // Uncomment statement to enable debugging mode
 
 // Print macros
-#ifdef DEBUG
-  #define DEBUG_BEGIN(x)      Serial.begin(x)
-  #define DEBUG_PRINT(x)      Serial.print(x)
-  #define DEBUG_PRINTLN(x)    Serial.println(x)
-  #define DEBUG_WRITE(...)    Serial.write(__VA_ARGS__)
+#ifdef DEBUGP
+#define DEBUG_BEGIN(x)      Serial.begin(x)
+#define DEBUG_PRINT(x)      Serial.print(x)
+#define DEBUG_PRINTLN(x)    Serial.println(x)
+#define DEBUG_WRITE(...)    Serial.write(__VA_ARGS__)
 #else
-  #define DEBUG_BEGIN(x)
-  #define DEBUG_PRINT(x)
-  #define DEBUG_PRINTLN(x)
-  #define DEBUG_WRITE(...)
+#define DEBUG_BEGIN(x)
+#define DEBUG_PRINT(x)
+#define DEBUG_PRINTLN(x)
+#define DEBUG_WRITE(...)
 #endif
 
 // Fixed constants - DO NOT TOUCH.
@@ -35,8 +35,13 @@ const byte final2Bits_SFrame = 0x01;
 #define BAUD_RATE         115200
 #define BUFFER_SIZE       16
 #define MIN_IFRAME_LENGTH 50
-#define MAX_IFRAME_LENGTH 128
-const TickType_t xDelay = 10 / portTICK_PERIOD_MS;    // 200ms - Period of TaskReadSensors
+#define MAX_IFRAME_LENGTH 160                         // Calculated Max length is 154
+
+#ifndef pdMSTOTICKS
+#define pdMS_TO_TICKS( xTimeInMs ) ( ( TickType_t ) ( ( ( TickType_t ) ( xTimeInMs ) * ( TickType_t ) configTICK_RATE_HZ ) / ( TickType_t ) 1000 ) )
+#endif
+// Tick problems - runs actually 17-18ms = 55 Hz. Accounted for in ML algo
+const TickType_t xDelay = pdMS_TO_TICKS(25);    // 25ms - Period of TaskReadSensors
 
 unsigned long startTime;
 uint8_t send_seq = 1, recv_seq = 0; // used for filling in control byte fields when sending frames
@@ -44,6 +49,7 @@ uint8_t lastSent = 0;                // keeps track of the current last frame pu
 uint8_t lastACK = BUFFER_SIZE - 1;   // keeps track of the last acknowledged frame by the RPi. Set to BUFFER_SIZE - 1 to account for first ACK case after handshake.
 uint8_t freeBuffer = BUFFER_SIZE;   // if = 0, stop reading new values
 char send_buf[BUFFER_SIZE][MAX_IFRAME_LENGTH];
+
 uint8_t buf_idx = 0;
 
 // FreeRTOS data structures
@@ -52,6 +58,13 @@ SemaphoreHandle_t xSerialSemaphore;  // Allow only one task to access the serial
 
 
 void setup() {
+/*  send_buf[0][0] = 'a'; send_buf[0][1] = 'a'; send_buf[0][2] = 'a'; send_buf[0][3] = 'a';
+  send_buf[1][0] = 'b'; send_buf[1][1] = 'a'; send_buf[1][2] = 'b'; send_buf[1][3] = 'a';
+  send_buf[2][0] = 'c'; send_buf[2][1] = 'a'; send_buf[2][2] = 'c'; send_buf[2][3] = 'a';
+  send_buf[3][0] = 'd'; send_buf[3][1] = 'a'; send_buf[3][2] = 'd'; send_buf[3][3] = 'a';
+  send_buf[4][0] = 'e'; send_buf[4][1] = 'a'; send_buf[4][2] = 'e'; send_buf[4][3] = 'a';
+  send_buf[5][0] = 'f'; send_buf[5][1] = 'a'; send_buf[5][2] = 'f'; send_buf[5][3] = 'a';
+*/
   pinMode(5, OUTPUT);
   pinMode(6, OUTPUT);
   pinMode(7, OUTPUT);
@@ -192,7 +205,9 @@ void TaskReadSensors(void *pvParameters) {
       vTaskDelayUntil(&prevWakeTime, xDelay);
       continue;
       }*/
+#ifdef DEBUGP
     xSemaphoreTake(xSerialSemaphore, portMAX_DELAY);
+#endif
 
     for (uint8_t i = 0; i < NUM_GY521; i++) {
       digitalWrite(5, HIGH);
@@ -212,7 +227,9 @@ void TaskReadSensors(void *pvParameters) {
       GyY[i] = Wire.read() << 8 | Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
       GyZ[i] = Wire.read() << 8 | Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
 
+#ifdef DEBUGP
       AcX[i] = AcY[i] = AcZ[i] = GyX[i] = GyY[i] = GyZ[i] = 69800 + 10 * i; // Dummy values, delete in actual
+#endif
 
       Wire.endTransmission(true);
     }
@@ -315,8 +332,9 @@ void TaskReadSensors(void *pvParameters) {
     // DEBUG_PRINT(" | Power(mW) = ");     DEBUG_PRINT(powerVal);
     // DEBUG_PRINT(" | Energy(J) = ");  DEBUG_PRINTLN(energyVal);
     // DEBUG_PRINT("Checksum: "); DEBUG_PRINTLN(checksum);
-
+#ifdef DEBUGP
     xSemaphoreGive(xSerialSemaphore);
+#endif
     vTaskDelayUntil(&prevWakeTime, xDelay);
   }
 }
