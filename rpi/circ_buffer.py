@@ -1,4 +1,4 @@
-import threading
+import asyncio
 
 
 class CircularBuffer:
@@ -18,12 +18,9 @@ class CircularBuffer:
         self.load = 0
         self.MAX_LOAD = 0.8 * self.maxlen  # Fill up to 80% before expanding
 
-        self.locks = [threading.RLock() for _ in range(self.maxlen)]
-
     def write_one(self, byte):
-        with self.locks[self.write_idx]:
-            self.buf[self.write_idx] = byte
-            self.write_idx = (self.write_idx + 1) & self.mask
+        self.buf[self.write_idx] = byte
+        self.write_idx = (self.write_idx + 1) & self.mask
         self.load += 1
 
     def write(self, bytes_):
@@ -33,9 +30,8 @@ class CircularBuffer:
             self.write_one(byte)
 
     def read(self):
-        with self.locks[self.read_idx]:
-            byte = self.buf[self.read_idx]
-            self.read_idx = (self.read_idx + 1) & self.mask
+        byte = self.buf[self.read_idx]
+        self.read_idx = (self.read_idx + 1) & self.mask
         self.load -= 1
         return byte
 
@@ -46,20 +42,25 @@ class CircularBuffer:
         read is the stop byte.
         """
         bytearr = []
-        cached_read_idx = self.read_idx
-        i = self.read_idx
         byte = None
-        while (byte != stop_byte):
+        is_first_byte = True
+        while (byte != stop_byte or is_first_byte):
             byte = self.read()
             bytearr.append(byte)
             if byte == stop_byte:
-                if ignore_first_byte and i == cached_read_idx:
+                if ignore_first_byte and is_first_byte:
                     continue
                 else:
                     break
-            i = (i + 1) & 0x7F
+            is_first_byte = False
 
         return bytearray(bytearr)
+
+    def clear(self):
+        self.read_idx = 0
+        self.write_idx = 0
+        self.load = 0
+        self.buf = bytearray(self.maxlen)
 
     def _will_be_full(self, size):
         """Returns true if buf will be full after size bytes added to buffer"""
@@ -71,10 +72,10 @@ class CircularBuffer:
         self.maxlen = 2 * self.maxlen
         self.mask = self.maxlen - 1
         self.MAX_LOAD = 0.8 * self.maxlen
-        self.locks = [threading.RLock() for _ in range(self.maxlen)]
+        self.locks = [asyncio.Lock() for _ in range(self.maxlen)]
 
         new_buf = bytearray(self.maxlen)
-        with threading.RLock():  # Don't allow reads/writes while expanding
+        with (yield from asyncio.Lock()):  # Don't allow reads/writes while expanding
             for i in range(len(self.buf)):
                 new_buf[i] = self.buf[i]  # Copy data
             self.buf = new_buf

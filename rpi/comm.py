@@ -95,16 +95,18 @@ class SerialProtocol(asyncio.Protocol):
         if self.start_stop_count > 1:   # Read if full frame received
             bytearr = self.buf.read_until(START_STOP_BYTE, ignore_first_byte=True)
             self.start_stop_count -= bytearr.count(START_STOP_BYTE)
+            # self.buf.clear()
 
-            print('Received bytes: {}'.format(BitArray(bytearr)))
+            # print('\nReceived bytes: {}'.format(BitArray(bytearr)))
 
             try:
                 fr = Frame.make_frame(bytearr)
             except ValueError as e:  # Frame error, eg incorrect checksum
                 print(e)
-                print('Requesting retransmission')
+                # print('Bytearr: {}'.format(BitArray(bytearr)))
+                # print('Requesting retransmission')
                 # self.file_pos_at_rej = csvfile.tell()  # Go back to this position before writing
-                self.rej_seqs.add(self.recv_seq)
+                # self.rej_seqs.add(self.recv_seq)
                 # self._rej_iframe_ready.set()  # Send REJ frame
                 return
 
@@ -125,12 +127,13 @@ class SerialProtocol(asyncio.Protocol):
 
                 # Retransmission received
                 if fr.send_seq in self.rej_seqs:
-                    self.rej_seqs.remove(fr.send_seq)
+                    # self.rej_seqs.remove(fr.send_seq)
                     # self.file_pos_at_rej = None
                     # csvfile.seek(self.file_pos_at_rej)
                     # csvfile.write(fr.to_ascii() + '\n')
                     # print('Overwrote csvfile')
                     # self._ack_iframe_ready.set()
+                    pass
 
                 # In-order transmission
                 elif fr.send_seq == self.recv_seq:
@@ -146,7 +149,7 @@ class SerialProtocol(asyncio.Protocol):
                     )
                     # self.recv_seq = self._decr_seq(self.recv_seq)
                     # self._rej_iframe_ready.set()  # Send REJ frame
-                    self.rej_seqs.add(fr.send_seq)
+                    # self.rej_seqs.add(fr.send_seq)
                     pass
 
                 if fr.send_seq & 0x1F == 0:  # Every 32 frames, force write to file
