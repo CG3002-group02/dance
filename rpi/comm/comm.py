@@ -31,7 +31,7 @@ class SerialProtocol(asyncio.Protocol):
         self.rej_seqs = set()  # Send seqs of iframes that have been rejected
         # self.file_pos_at_rej = None
 
-        self.buf = CircularBuffer(4096)
+        self.buf = CircularBuffer(8192)
         self.send_buf = {}  # Max size of 128, keyed by send seq
         self.send_buf[self.send_seq] = []  # Allow appending to first elem
 
@@ -103,12 +103,14 @@ class SerialProtocol(asyncio.Protocol):
                 fr = Frame.make_frame(bytearr)
             except ValueError as e:  # Frame error, eg incorrect checksum
                 print(e)
+                # self.recv_seq = self._incr_seq(self.recv_seq)
                 # print('Bytearr: {}'.format(BitArray(bytearr)))
                 # print('Requesting retransmission')
                 # self.file_pos_at_rej = csvfile.tell()  # Go back to this position before writing
                 # self.rej_seqs.add(self.recv_seq)
                 # self._rej_iframe_ready.set()  # Send REJ frame
                 return
+                # pass
 
             if fr.SORT == Frame.Sort.H:
                 if fr.recv_seq == self.send_seq:   # Arduino echoed seq sent
@@ -144,6 +146,8 @@ class SerialProtocol(asyncio.Protocol):
 
                 # One or more frames were lost
                 else:
+                    self.recv_seq = self._incr_seq(self.recv_seq)
+
                     print('Frame(s) {} missing. Requesting retransmission'.format(
                         [i for i in range(self.recv_seq, fr.send_seq)])
                     )
@@ -227,12 +231,20 @@ async def feed_frame(protocol, frame):
         await protocol.send_message(frame.bytes)
 
 
-if __name__ == '__main__':
-    if (len(sys.argv) != 3):
-        print('python comm.py <folder_name> <file_name>')
-        sys.exit()
+def _run(corofn, *args):
+    loop = asyncio.new_event_loop()
+    try:
+        coro = corofn(*args)
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
-    csvfile = open('{}/{}.csv'.format(sys.argv[1], sys.argv[2]), 'w+', newline='')
+
+def run_comm_loop(filename, background):
+    global csvfile
+
+    csvfile = open(filename, 'w+', newline='')
     csvfile.seek(0)
     csvfile.truncate()   # remove preivous data
     csvfile.write('AcX 1,AcY 1,AcZ 1,GyX 1,GyY 1,GyZ 1,AcX 2,AcY 2,AcZ 2,GyX 2,GyY 2,GyZ 2,AcX 3,AcY 3,AcZ 3,GyX 3,GyY 3,GyZ 3,voltage,current,power,energy\n')
@@ -242,15 +254,27 @@ if __name__ == '__main__':
                                                    SerialProtocol,
                                                    '/dev/serial0',
                                                    baudrate=115200)
-    _, proto = loop.run_until_complete(coro)
+    loop_task, proto = loop.run_until_complete(coro)
     # message = IFrame(proto.recv_seq, proto.send_seq, b'abcdef')
     # asyncio.ensure_future(feed_frame(proto, message))
 
     try:
-        loop.run_forever()
+        if background:
+            loop.run_in_executor(None, loop_task, coro)
+            # loop.run_in_executor(None, _run, coro)
+        else:
+            loop.run_forever()
     except KeyboardInterrupt:
         print('Closing connection')
 
     loop.close()
     csvfile.flush()
     csvfile.close()
+
+
+if __name__ == '__main__':
+    if (len(sys.argv) != 3):
+        print('python comm.py <folder_name> <file_name>')
+        sys.exit()
+
+    run_comm_loop('{}/{}.csv'.format(sys.argv[1], sys.argv[2]), False)
