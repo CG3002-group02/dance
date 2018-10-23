@@ -1,7 +1,7 @@
 
 # coding: utf-8
 
-# In[50]:
+# In[1]:
 
 
 # Importation of  model
@@ -9,6 +9,10 @@ import pickle
 
 # data analysis
 import pandas as pd
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 
 def predict():
     filename_mlp = "Neural_Network_Model.sav"
