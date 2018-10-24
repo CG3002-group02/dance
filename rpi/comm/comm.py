@@ -4,8 +4,12 @@ import sys
 import serial_asyncio
 from bitstring import BitArray
 
-from circ_buffer import CircularBuffer
-from framing import START_STOP_BYTE, Frame, IFrame, SFrame, HFrame
+try:
+    from circ_buffer import CircularBuffer
+    from framing import START_STOP_BYTE, Frame, IFrame, SFrame, HFrame
+except ImportError:
+    from .circ_buffer import CircularBuffer
+    from .framing import START_STOP_BYTE, Frame, IFrame, SFrame, HFrame
 
 
 csvfile = None

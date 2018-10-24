@@ -10,29 +10,28 @@ def DataProcessing():
     time.sleep(2)
 
     # read data
-    data = pd.read_csv('~/3002/readings.csv')
+    data = pd.read_csv('/home/pi/3002/readings.csv')
+    data = data.tail(110).copy()
 
     cleaned_data = data.drop(['voltage','current','power','energy'],axis =1) #delete column
-    cleaned_data = pd.DataFrame(preprocessing.scale(data.drop(['voltage','current','power','energy'],axis =1)),
+    cleaned_data = pd.DataFrame(preprocessing.scale(cleaned_data),
                                                    columns=['AcX 1', 'AcY 1', 'AcZ 1', 'GyX 1', 'GyY 1', 'GyZ 1',
                                                             'AcX 2', 'AcY 2', 'AcZ 2', 'GyX 2', 'GyY 2', 'GyZ 2',
                                                             'AcX 3', 'AcY 3', 'AcZ 3', 'GyX 3', 'GyY 3', 'GyZ 3'])
-
     mean_data = pd.DataFrame()
     std_data = pd.DataFrame()
 
-    i = 0
+    # i = 0
 
     # segmentation at 80% @ 55Hz 2s
-    for count in range(5):
-        a = cleaned_data[i:i+110].copy()
-        a.loc['mean'] = a.mean()
-        a.loc['std'] = a.std()
+    a = cleaned_data[0:110].copy()
+    a.loc['mean'] = a.mean()
+    a.loc['std'] = a.std()
 
-        mean_data = mean_data.append(a.loc['mean'], ignore_index=True) #store in mean_data list
-        std_data = std_data.append(a.loc['std'], ignore_index=True)    #store in std_data list
+    mean_data = mean_data.append(a.loc['mean'], ignore_index=True) #store in mean_data list
+    std_data = std_data.append(a.loc['std'], ignore_index=True)    #store in std_data list
 
-        i += 21
+    # i += 21
 
 
     # rearrangement of columns
@@ -55,15 +54,15 @@ def DataProcessing():
     extracted_data = mean_data.join(std_data) #merge the mean_data list and std_data list
 
     # store row 110
-    data = pd.read_csv('~/3002/readings.csv')
-    data = data[110::].copy()
-    data.to_csv(r'~/3002/readings.csv',index=False)
+    # data = pd.read_csv('/home/pi/3002/readings.csv')
+    # data = data[110::].copy()
+    # data.to_csv(r'/home/pi/3002/readings.csv',index=False)
 
-    extracted_data.to_csv('~/3002/ml/extracted_data.csv')
+    extracted_data.to_csv('/home/pi/3002/ml/extracted_data.csv', index=False)
 
-    voltage = data.head(1).loc["voltage"]
-    current = data.head(1).loc["current"]
-    power = data.head(1).loc["power"]
-    energy = data.head(1).loc["energy"]
+    voltage = data["voltage"].iloc[-1]
+    current = data["current"].iloc[-1]
+    power = data["power"].iloc[-1]
+    energy = data["energy"].iloc[-1]
 
     return (voltage, current, power, energy)
