@@ -58,6 +58,7 @@ class SerialProtocol(asyncio.Protocol):
         waits until RR is received.
         """
         await self._ready.wait()  # Wait until handshake is complete
+
         while True:
             await self._secondary_ready.wait()  # Wait if RNR received
             data = await self.queue.get()
