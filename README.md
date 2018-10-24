@@ -11,3 +11,4 @@ https://docs.google.com/document/d/1FAlM0cirhWgGOJzw1R9TF6pA_5u--P8LkLgUG9kgvK4/
 ## arduino
 ## hardware design
 
+<img src= "hardware/phy_hardware.jpg" width="400" height="400" />
