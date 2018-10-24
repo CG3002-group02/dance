@@ -9,4 +9,6 @@ https://docs.google.com/document/d/1FAlM0cirhWgGOJzw1R9TF6pA_5u--P8LkLgUG9kgvK4/
 - Client setup
 
 ## arduino
-![](widpertest.gif)
+
+## Dance move example
+<img src = "widpertest.gif" width="200" height="200" />
