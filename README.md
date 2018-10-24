@@ -9,3 +9,5 @@ https://docs.google.com/document/d/1FAlM0cirhWgGOJzw1R9TF6pA_5u--P8LkLgUG9kgvK4/
 - Client setup
 
 ## arduino
+## hardware design
+
