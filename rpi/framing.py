@@ -1,11 +1,8 @@
-import binascii
 from enum import Enum
-import sys
 
 import bitstring
 from bitstring import BitArray
 from crc16 import crc16xmodem
-import serial
 
 
 START_STOP_BYTE = 126  # 7E
@@ -22,38 +19,34 @@ class Frame:
     CONTROL_MASK = BitArray('0x0003')
     SFRAME_MASK = BitArray('0x000C')
 
-
-    def __init__(self, bitarr, info, escaped):
-        """Stores complete, escaped frame in self.bytes and unescaped frame in self.bitarr. 
+    def __init__(self, bitarr, info):
+        """Stores escaped frame in self.bytes and unescaped frame in self.bitarr.
         Other useful fields such as control and checksum are also stored as instance
         members.
         """
-        if escaped:
-            self.bytes = bitarr.bytes
-            self.bitarr = BitArray(Frame.unescape(bitarr.bytes))
-        else:
-            self.bytes = Frame.escape(bitarr.bytes)   # type bytes. Contains full, escaped frame
-            self.bitarr = bitarr          # type bitarr. Contains unescaped frame, no start/stop bytes
+        self.bytes = Frame.escape(bitarr.bytes)   # type bytes. Contains full, escaped frame
+        self.bitarr = bitarr          # type bitarr. Contains unescaped frame, with start/stop bytes
 
-        self.control = self.bitarr[8:24]                          # type bitarr
+        self.control = self.bitarr[8:24]   # type bitarr
+        self.recv_seq = self.control[0:7].uint
         self.info = self.bitarr[24:-24].bytes if info else None   # type bitarr
         self.checksum = self.bitarr[-24:-8].uint                  # type uint, does NOT recalculate
         if not self.is_checksum_valid():
             raise ValueError('Checksum received ({}) is not equal to checksum calculated ({})'
                 .format(self.checksum, self.calc_checksum(self.bitarr[8:-24].bytes)))
 
-        self.bytes = self.bitarr.bytes   
-
-
     def calc_checksum(self, bytes_):
         return crc16xmodem(bytes_)
+
+    def is_checksum_valid(self):
+        return self.checksum == self.calc_checksum(self.bitarr[8:-24].bytes)
 
     @staticmethod
     def escape(bytes_):
         """Escapes bytes 7D and 7E with 7D EXCEPT for first and last bytes"""
         escaped = []
         for index, byte in enumerate(bytes_):
-            if (byte == START_STOP_BYTE 
+            if (byte == START_STOP_BYTE
               and not (index == 0 or index == len(bytes_)-1)):
                 escaped.append(ESCAPE_BYTE)
                 escaped.append(94)  # 7E ^ 20 = uint 94
@@ -82,36 +75,42 @@ class Frame:
                     unescaped.append(START_STOP_BYTE)
                 elif byte == 93:   # 7D was xor-ed
                     unescaped.append(ESCAPE_BYTE)
+                else:
+                    raise ValueError('Byte {} escaped when it should not be'.format(byte))
                 escape_state = 0
             else:
                 unescaped.append(byte)
                 escape_state = 0
-            
+
         return bytes(unescaped)
 
-    def is_checksum_valid(self):
-        return self.checksum == self.calc_checksum(self.bitarr[8:-24].bytes)
-
     @staticmethod
-    def make_frame(bytearr):
-        """Creates I, S or H-frame based on bitarr. Bitarr must contain exactly 
+    def make_frame(bytes_):
+        """Creates I, S or H-frame based on bitarr. Bitarr must contain exactly
         one complete frame, including start and stop bytes.
         Frame returned is of type Frame, not its subclass.
         """
-        bitarr = BitArray(bytes(bytearr[1:-2]))
-        control = bitarr[0:16]
+        if (bytes_[0] != START_STOP_BYTE or bytes_[-1] != START_STOP_BYTE):
+            raise ValueError('Message does not contain either start byte, stop byte, or both')
+
+        bitarr = BitArray(Frame.unescape(bytes_))
+        control = bitarr[8:24]
         sort = Frame.get_frame_sort(control)
         if sort == Frame.Sort.I:
-            frame = Frame(bitarr, info=True, escaped=True)
+            frame = Frame(bitarr, info=True)
+            frame.__class__ = IFrame
             frame.SORT = Frame.Sort.I
+            frame.send_seq = control[8:15].uint
 
         elif sort == Frame.Sort.S:
-            frame = Frame(bitarr, info=False, escaped=True)
+            frame = Frame(bitarr, info=False)
+            frame.__class__ = SFrame
             frame.SORT = Frame.Sort.S
-            frame.type = Frame.get_sframe_type(control)
+            frame.TYPE = Frame.get_sframe_type(control)
 
         elif sort == Frame.Sort.H:
-            frame = Frame(bitarr, info=False, escaped=True)
+            frame = Frame(bitarr, info=False)
+            frame.__class__ = HFrame
             frame.SORT = Frame.Sort.H
 
         return frame
@@ -134,12 +133,14 @@ class Frame:
 class IFrame(Frame):
     SORT = Frame.Sort.I
 
-    def __init__(self, receive_seq, send_seq, info, p_f=1):
+    def __init__(self, recv_seq, send_seq, info, p_f=1):
         """Creates an I-frame for sending with info as the payload.
         To classify a received frame, use the Frame.make_frame method.
         info should be ascii-encoded bytes.
         """
-        control_byte1 = bitstring.pack('uint:7, bool', receive_seq, p_f).uint
+        self.send_seq = send_seq
+
+        control_byte1 = bitstring.pack('uint:7, bool', recv_seq, p_f).uint
         control_byte2 = bitstring.pack('uint:7, bool=0', send_seq).uint
 
         checksum_bytes = bitstring.pack(
@@ -153,30 +154,33 @@ class IFrame(Frame):
             START_STOP_BYTE,
             control_byte1,
             control_byte2,
-            info,
+            info,             # variable length
             checksum,
             START_STOP_BYTE
         ))
 
-        super().__init__(bitarr, info=True, escaped=False)
+        super().__init__(bitarr, info=True)
+
+    def to_ascii(self):
+        return self.info.decode('ascii')
 
 
 class SFrame(Frame):
     class Type(Enum):
         RR = 0    # Receive Ready to accept more I-frames
-        REJ = 1   # REJect, Go-Back-N retransmission request for an I-frame 
+        REJ = 1   # REJect, Go-Back-N retransmission request for an I-frame
         RNR = 2   # Receive Not Ready to accept more I-frames
-        SREJ = 3  # Selective REJect, retransmission request for one I-frame  
+        SREJ = 3  # Selective REJect, retransmission request for one I-frame
 
     SORT = Frame.Sort.S
 
-    def __init__(self, receive_seq, sframe_type, p_f=1):
+    def __init__(self, recv_seq, sframe_type, p_f=1):
         """Creates an S-frame for sending with type specified.
         To classify a received frame, use the Frame.make_frame method.
         """
-        self.type = sframe_type
+        self.TYPE = sframe_type
 
-        control_byte1 = bitstring.pack('uint:7, bool', receive_seq, p_f).uint
+        control_byte1 = bitstring.pack('uint:7, bool', recv_seq, p_f).uint
         control_byte2 = bitstring.pack('uint:4=0, uint:2, uint:2=1', sframe_type.value).uint
 
         checksum_bytes = bitstring.pack(
@@ -193,17 +197,17 @@ class SFrame(Frame):
             START_STOP_BYTE
         ))
 
-        super().__init__(bitarr, info=False, escaped=False)
+        super().__init__(bitarr, info=False)
 
 
 class HFrame(Frame):
     SORT = Frame.Sort.H
 
-    def __init__(self, receive_seq):
+    def __init__(self, send_seq):
         """Creates an H-frame for sending.
         To classify a received frame, use the Frame.make_frame method.
         """
-        control_byte1 = bitstring.pack('uint:7, bool=1', receive_seq).uint  # receive_seq is 7 bits long
+        control_byte1 = bitstring.pack('uint:7, bool=1', send_seq).uint
         control_byte2 = 3  # 0b00000011 (RR, type H-frame)
 
         checksum_bytes = bitstring.pack(
@@ -213,11 +217,11 @@ class HFrame(Frame):
 
         bitarr = BitArray(bitstring.pack(
             'uint:8, uint:8, uint:8, uint:16, uint:8',
-            START_STOP_BYTE,                    # 0x7e
-            control_byte1,                      # receive_seq
-            control_byte2,                      # 0x03
-            self.calc_checksum(checksum_bytes), # crc16xmodem(checksum_bytes)
-            START_STOP_BYTE                     # 0x03
+            START_STOP_BYTE,                     # 0x7E
+            control_byte1,                       # receive_seq, p/f
+            control_byte2,                       # 0x03
+            self.calc_checksum(checksum_bytes),  # crc16xmodem(checksum_bytes)
+            START_STOP_BYTE                      # 0x7E
         ))
 
-        super().__init__(bitarr, info=False, escaped=False)
+        super().__init__(bitarr, info=False)
