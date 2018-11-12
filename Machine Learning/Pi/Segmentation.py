@@ -14,31 +14,32 @@ from sklearn import preprocessing
 
 import datetime
 
-def data_processing(a):
+def data_processing(b):
     start = datetime.datetime.now()
-    time.sleep(a)
+    time.sleep(b)
     # read data
     
     data = pd.read_csv('/home/pi/3002/readings.csv')
-    data = data.tail(110)
+    data = data.tail(110).copy()
     cleaned_data = data.drop(['voltage','current','power','energy'],axis =1).copy() #delete column
     
+    a = pd.DataFrame()
     mean_data = pd.DataFrame() 
     max_data = pd.DataFrame()
     iqr_data = pd.DataFrame()
     mad_data = pd.DataFrame()
+    
+    a = cleaned_data[0:110].copy()
+    a.loc['mean'] = a.mean()
+    a.loc['max'] = a.max()
+    a.loc['iqr'] = a.quantile(0.75) - a.quantile(0.25)
+    a.loc['mad'] = a.mad()
 
-
-    cleaned_data.loc['mean'] = cleaned_data.mean()
-    cleaned_data.loc['max'] = cleaned_data.max()
-    cleaned_data.loc['iqr'] = cleaned_data.quantile(0.75) - cleaned_data.quantile(0.25)
-    cleaned_data.loc['mad'] = cleaned_data.mad()
-
-    mean_data = mean_data.append(cleaned_data.loc['mean'], ignore_index=True)
-    max_data = max_data.append(cleaned_data.loc['max'], ignore_index=True)
-    iqr_data = iqr_data.append(cleaned_data.loc['iqr'], ignore_index=True)
-    mad_data = mad_data.append(cleaned_data.loc['mad'], ignore_index=True)
-
+    mean_data = mean_data.append(a.loc['mean'], ignore_index=True)
+    max_data = max_data.append(a.loc['max'], ignore_index=True)
+    iqr_data = iqr_data.append(a.loc['iqr'], ignore_index=True)
+    mad_data = mad_data.append(a.loc['mad'], ignore_index=True)
+        
     # rearrangement of columns
     mean_data = mean_data.rename(index=str, columns={'AcX 1': 'mean_AcX 1', 'AcY 1': 'mean_AcY 1', 'AcZ 1': 'mean_AcZ 1', 
                                                      'GyX 1': 'mean_GyX 1', 'GyY 1': 'mean_GyY 1', 'GyZ 1': 'mean_GyZ 1',
